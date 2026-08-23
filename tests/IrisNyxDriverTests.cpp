@@ -139,6 +139,78 @@ private:
 } // namespace
 
 DESCRIBE("IrisNyxDriver", {
+    // docs/archive/iris_nyx_runtime_injection_gap_resolved.md: the constructor overload letting a host share
+    // one caller-owned nyx::host::NyxRuntime across this driver and a second, independent Nyx
+    // integration (e.g. penumbra-proto's Penumbra::Nyx::ApplicationBridge). Proves the shared
+    // runtime is genuinely the same object both sides see -- a type/function registered on the
+    // externally-owned runtime directly, with no IrisNyxDriver API involved at all, is visible
+    // to a .irisx file this driver mounts against it.
+    IT("mounts against an externally-owned NyxRuntime supplied via the injection constructor, "
+       "not a private one this driver constructs itself",
+       {
+        TempProject Project;
+        const std::string AppPath = Project.Write("App.irisx",
+                                                    "void App() {\n"
+                                                    "    render {\n"
+                                                    "        <Frame class={GetLabel()} />\n"
+                                                    "    }\n"
+                                                    "}\n");
+
+        nyx::host::NyxRuntime ExternalRuntime;
+        // Registered on the external runtime directly, before the driver even exists --
+        // proves this driver evaluates against the exact object passed in, not a copy or a
+        // separately-constructed one of its own.
+        ExternalRuntime.RegisterFunction("GetLabel", [](std::vector<nyx::runtime::Value>) -> nyx::runtime::Value {
+            return nyx::runtime::Value(std::string("from-external-runtime"));
+        });
+
+        IrisNyxDriver Driver(UmbraConfig(), Project.RootPath(), ExternalRuntime);
+        const Component Root = Driver.MountRoot(AppPath, "App");
+
+        REQUIRE_TRUE(Driver.Errors().empty());
+        ASSERT_TRUE(std::get<std::string>(Root.Props.at("class")) == "from-external-runtime");
+        // Driver.Runtime() must be the very same object as ExternalRuntime, not a distinct
+        // owned instance -- registering a second function directly on ExternalRuntime and
+        // reading it back through Driver.Runtime().Globals() confirms identity, not just
+        // behavioral similarity.
+        ExternalRuntime.RegisterFunction("Marker", [](std::vector<nyx::runtime::Value>) -> nyx::runtime::Value {
+            return nyx::runtime::Value(std::string("marker"));
+        });
+        ASSERT_TRUE(Driver.Runtime().Globals().count("Marker") == 1);
+        ASSERT_TRUE(&Driver.Runtime() == &ExternalRuntime);
+    });
+
+    // A second IrisNyxDriver constructed with the owning (single-argument-plus-root)
+    // constructor against a *different* ExternalRuntime-free NyxRuntime must not see functions
+    // registered only on the first driver's externally-owned runtime -- proves the two
+    // constructors' runtimes are genuinely independent, not accidentally shared through some
+    // process-global state.
+    IT("a driver constructed with the owning constructor does not see registrations made on a "
+       "separate driver's externally-owned runtime",
+       {
+        TempProject Project;
+        const std::string AppPath = Project.Write("App.irisx",
+                                                    "void App() {\n"
+                                                    "    render {\n"
+                                                    "        <Frame class={GetLabel()} />\n"
+                                                    "    }\n"
+                                                    "}\n");
+
+        nyx::host::NyxRuntime ExternalRuntime;
+        ExternalRuntime.RegisterFunction("GetLabel", [](std::vector<nyx::runtime::Value>) -> nyx::runtime::Value {
+            return nyx::runtime::Value(std::string("external"));
+        });
+        IrisNyxDriver InjectedDriver(UmbraConfig(), Project.RootPath(), ExternalRuntime);
+        (void)InjectedDriver;
+
+        IrisNyxDriver OwningDriver(UmbraConfig(), Project.RootPath());
+        const Component Root = OwningDriver.MountRoot(AppPath, "App");
+
+        // GetLabel was never registered on OwningDriver's own private runtime, so this mount
+        // must fail rather than silently resolving to "external".
+        ASSERT_FALSE(OwningDriver.Errors().empty());
+    });
+
     IT("mounts a single-file component with no imports", {
         TempProject Project;
         const std::string AppPath = Project.Write("App.irisx",

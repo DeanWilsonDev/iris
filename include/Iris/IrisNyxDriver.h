@@ -80,7 +80,23 @@ public:
     // `Config`/`ProjectRoot` are exactly `Driver.h`'s `CompileFile` parameters -- this
     // class delegates every `.irisx` -> IR compilation to that existing pipeline rather
     // than re-implementing RenderBlockParser/BuildIrisIr/ImportResolver wiring itself.
+    // Owns its own `nyx::host::NyxRuntime` (`OwnedRuntime_` below) -- use this constructor
+    // when nothing else in the host application needs to reach the same runtime.
     IrisNyxDriver(IrisConfig Config, std::string ProjectRoot);
+
+    // Same as above, but binds this driver's `Runtime_` to `ExternalRuntime` instead of
+    // constructing/owning a private one (docs/archive/iris_nyx_runtime_injection_gap_resolved.md) -- lets a
+    // host application share exactly one `nyx::host::NyxRuntime` between this driver's own
+    // `.irisx` mounting and a second, independent Nyx integration it also runs (e.g.
+    // `penumbra-proto`'s `Penumbra::Nyx::ApplicationBridge`), so types/functions registered
+    // on one side are directly callable from the other with no hand-written C++ relay.
+    // `ExternalRuntime` must outlive this `IrisNyxDriver` -- ownership stays with the
+    // caller, exactly like `Runtime()`'s own returned reference already implies for the
+    // owning constructor above; this class never copies or moves the referenced runtime.
+    // Performs the same up-front registration (`RegisterSignalDecorator`, the `<Slot>`
+    // marker, `Component`'s inheritable type) as the owning constructor -- additive calls,
+    // safe to run again even if `ExternalRuntime` already has other registrations on it.
+    IrisNyxDriver(IrisConfig Config, std::string ProjectRoot, nyx::host::NyxRuntime& ExternalRuntime);
 
     // Registers `Runtime()` `@signal` decorator support up front (`RegisterSignalDecorator`,
     // NyxSignalDecorator.h) and the `<Slot>` JSX-transform marker (`ChaosSlotMarker`,
@@ -319,10 +335,32 @@ private:
     // more than this one function.
     NativeBuilderLookup MakeNativeBuilderLookup();
 
+    // Shared by both constructors: the up-front registration (`RegisterSignalDecorator`,
+    // `<Slot>` marker, `Component` inheritable type) every mounting/evaluation path in this
+    // class needs live before the first `MountRoot`/`ReloadRoot`, regardless of who owns
+    // `Runtime_`.
+    void InitializeRuntime();
+
     IrisConfig  Config_;
     std::string ProjectRoot_;
 
-    nyx::host::NyxRuntime Runtime_;
+    // Set (constructed in place) only by the owning constructor -- `Runtime_` below is bound
+    // to `*OwnedRuntime_` in that case. Left empty when constructed against an externally-
+    // owned runtime (the `ExternalRuntime` constructor), in which case `Runtime_` aliases the
+    // caller's own object instead. Declared before `Runtime_` deliberately: member
+    // initialization runs in declaration order, and `Runtime_`'s reference must bind to an
+    // already-constructed `*OwnedRuntime_` in the owning constructor's initializer list.
+    std::optional<nyx::host::NyxRuntime> OwnedRuntime_;
+
+    // Always valid for this object's whole lifetime -- either aliases `OwnedRuntime_` above
+    // (owning constructor) or the caller-supplied external runtime (injected constructor).
+    // A reference, not a pointer, so every existing call site (`Runtime_.Foo(...)`) keeps
+    // working unchanged regardless of which constructor built this driver
+    // (docs/archive/iris_nyx_runtime_injection_gap_resolved.md's own proposed direction). This does mean
+    // `IrisNyxDriver` is not assignable (copy or move) -- it wasn't move/copy-assignable
+    // before this change either, since `nyx::host::NyxRuntime` itself holds `unique_ptr`
+    // members and was already non-copyable.
+    nyx::host::NyxRuntime& Runtime_;
     ChaosSlotMarker         Marker_;
 
     std::unordered_map<std::string, IrisIrDocument>              Documents_;

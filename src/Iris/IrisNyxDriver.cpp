@@ -183,7 +183,18 @@ std::shared_ptr<Umbra::IWidgetLifecycle> BuildFreeFunctionLifecycleAdapter(nyx::
 } // namespace
 
 IrisNyxDriver::IrisNyxDriver(IrisConfig Config, std::string ProjectRoot)
-    : Config_(std::move(Config)), ProjectRoot_(std::move(ProjectRoot)) {
+    : Config_(std::move(Config)), ProjectRoot_(std::move(ProjectRoot)), OwnedRuntime_(std::in_place),
+      Runtime_(*OwnedRuntime_) {
+    InitializeRuntime();
+}
+
+IrisNyxDriver::IrisNyxDriver(IrisConfig Config, std::string ProjectRoot, nyx::host::NyxRuntime& ExternalRuntime)
+    : Config_(std::move(Config)), ProjectRoot_(std::move(ProjectRoot)), OwnedRuntime_(std::nullopt),
+      Runtime_(ExternalRuntime) {
+    InitializeRuntime();
+}
+
+void IrisNyxDriver::InitializeRuntime() {
     iris::RegisterSignalDecorator(Runtime_);
     Marker_.RegisterOn(Runtime_);
     // Model 2 (class-based) components extend this -- decision-log.md §9.2's own framing: one
