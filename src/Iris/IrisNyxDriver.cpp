@@ -6,6 +6,7 @@
 
 #include "runtime/class-field-schema.hpp"
 #include "runtime/environment.hpp"
+#include "runtime/runtime-error.hpp"
 
 #include <amanuensis/io/reader.hpp>
 
@@ -205,6 +206,32 @@ void IrisNyxDriver::InitializeRuntime() {
 }
 
 nyx::host::NyxRuntime& IrisNyxDriver::Runtime() { return Runtime_; }
+
+nyx::runtime::Value IrisNyxDriver::InvokeInstanceCallable(
+    const std::shared_ptr<iris::ComponentInstance>& Instance, const std::string& Binding,
+    std::vector<nyx::runtime::Value> Args) {
+    NyxDriverState* State = GetDriverState(Instance);
+    if (State == nullptr) {
+        Errors_.push_back(IrisIrRuntimeError{
+            "cannot invoke instance binding '" + Binding + "': component instance has no Nyx driver state", {}});
+        return {};
+    }
+
+    const nyx::runtime::Value* Callable = State->RenderScope.context.env->FindOwn(Binding);
+    if (Callable == nullptr) {
+        Errors_.push_back(IrisIrRuntimeError{
+            "cannot invoke instance binding '" + Binding + "': binding is not declared by this component", {}});
+        return {};
+    }
+
+    try {
+        return State->RenderScope.interpreter->InvokeCallable(*Callable, std::move(Args));
+    } catch (const nyx::runtime::RuntimeError& Error) {
+        Errors_.push_back(IrisIrRuntimeError{
+            "invoking instance binding '" + Binding + "' failed: " + Error.what(), {}});
+        return {};
+    }
+}
 
 void IrisNyxDriver::RegisterNativeBuilder(std::string Name, std::function<std::unique_ptr<Umbra::IWidget>()> Factory) {
     NativeBuilders_[std::move(Name)] = [Factory = std::move(Factory)](const nyx::runtime::Value&) {

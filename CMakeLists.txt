@@ -122,11 +122,13 @@ set_target_properties(nyx-lexer PROPERTIES
 # Verified by inspection that parser.cpp, runtime/value.cpp,
 # runtime/environment.cpp, interpreter/interpreter.cpp, and
 # interpreter/decl-registry.cpp have zero dependency on the rest of
-# nyx-proto — unlike host/logging.cpp and host/stub-types.cpp (both Firefly-
-# touching, and both unneeded here: `@signal` never calls RegisterPharosStubs
-# or the Log stub type), which are deliberately excluded. host/nyx-runtime.hpp
-# itself (NyxRuntime, DecoratorBuilder) is header-only, so it needs no
-# translation unit of its own. Built at this project's own C++23, not
+# nyx-proto. host/stub-types.cpp remains excluded (Iris never calls
+# RegisterPharosStubs or the Log stub type). host/logging.cpp is required by
+# interpreter.cpp's eval-trace chokepoints as of nyx-proto c3a71dd; its Firefly
+# dependency is reconstructed below against this repo's existing Amanuensis
+# target rather than add_subdirectory-ing Firefly's own duplicate dependency
+# tree. host/nyx-runtime.hpp itself (NyxRuntime, DecoratorBuilder) is header-only,
+# so it needs no translation unit of its own. Built at this project's own C++23, not
 # nyx-proto's own required C++26 -- see nyx-lexer's own CXX_STANDARD comment
 # above for why: this target is exactly where that ABI mismatch was found,
 # since ComponentInstance.h/NyxSignalDecorator.h pass nyx::runtime::Value
@@ -143,15 +145,30 @@ set_target_properties(nyx-lexer PROPERTIES
 # gap like this is the one thing that switch does *not* fix automatically — a new
 # nyx-proto .cpp still needs adding here by hand the next time one lands upstream.
 # ---------------------------------------------------------------------------
+add_library(nyx-firefly STATIC
+    ${nyx_SOURCE_DIR}/external/firefly/src/logger.cpp
+    ${nyx_SOURCE_DIR}/external/firefly/src/log-registry.cpp
+    ${nyx_SOURCE_DIR}/external/firefly/src/sinks/plain-text-sink.cpp
+    ${nyx_SOURCE_DIR}/external/firefly/src/sinks/json-sink.cpp
+    ${nyx_SOURCE_DIR}/external/firefly/src/sinks/ndjson-sink.cpp
+    ${nyx_SOURCE_DIR}/external/firefly/src/sinks/csv-sink.cpp)
+target_include_directories(nyx-firefly PUBLIC ${nyx_SOURCE_DIR}/external/firefly/include)
+target_link_libraries(nyx-firefly PRIVATE amanuensis)
+target_precompile_headers(nyx-firefly PRIVATE ${nyx_SOURCE_DIR}/external/firefly/include/pch.hpp)
+set_target_properties(nyx-firefly PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON)
+
 add_library(nyx-runtime STATIC
     ${nyx_SOURCE_DIR}/src/parser/parser.cpp
     ${nyx_SOURCE_DIR}/src/runtime/value.cpp
     ${nyx_SOURCE_DIR}/src/runtime/environment.cpp
     ${nyx_SOURCE_DIR}/src/interpreter/resolver.cpp
     ${nyx_SOURCE_DIR}/src/interpreter/interpreter.cpp
-    ${nyx_SOURCE_DIR}/src/interpreter/decl-registry.cpp)
+    ${nyx_SOURCE_DIR}/src/interpreter/decl-registry.cpp
+    ${nyx_SOURCE_DIR}/src/host/logging.cpp)
 target_include_directories(nyx-runtime PUBLIC ${nyx_SOURCE_DIR}/src)
-target_link_libraries(nyx-runtime PUBLIC nyx-lexer)
+target_link_libraries(nyx-runtime PUBLIC nyx-lexer PRIVATE nyx-firefly)
 set_target_properties(nyx-runtime PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON)

@@ -145,6 +145,20 @@ public:
     // check `Errors().size()` before and after.
     const std::vector<IrisIrRuntimeError>& Errors() const { return Errors_; }
 
+    // Invokes a callable local captured by one already-mounted interpreted component instance.
+    // `Binding` is resolved only from that invocation's own call-frame environment, then handed
+    // back to the same Interpreter that produced it so its lexical environment and captured
+    // `this` receiver remain intact. Arguments and the successful result are forwarded unchanged.
+    //
+    // On a null/non-Nyx-mounted instance, a missing own binding, or a Nyx `RuntimeError`
+    // (including a non-callable binding), appends one diagnostic to `Errors()` and returns Nyx
+    // null. Like every other driver operation, errors accumulate and are never cleared
+    // automatically. This deliberately exposes no `NyxDriverState` pointer and performs no
+    // import lookup or cross-Interpreter invocation.
+    nyx::runtime::Value InvokeInstanceCallable(const std::shared_ptr<iris::ComponentInstance>& Instance,
+                                                const std::string& Binding,
+                                                std::vector<nyx::runtime::Value> Args = {});
+
     // Loads (compiling via `Driver.h`'s `CompileFile` if not already cached),
     // mounts, and returns `EntryFunctionName`'s render output from
     // `EntryResolvedPath` -- the application's own root component, the one invocation

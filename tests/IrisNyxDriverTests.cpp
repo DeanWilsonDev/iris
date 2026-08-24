@@ -139,6 +139,79 @@ private:
 } // namespace
 
 DESCRIBE("IrisNyxDriver", {
+    IT("invokes component-local callables with isolated captured mutable state and forwards arguments/results", {
+        TempProject Project;
+        const std::string CounterPath = Project.Write("Counter.irisx",
+                                                       "void Counter(int start) {\n"
+                                                       "    int count = start;\n"
+                                                       "    auto advance = (int amount) -> { count += amount; return count; };\n"
+                                                       "    render {\n"
+                                                       "        <Frame />\n"
+                                                       "    }\n"
+                                                       "}\n");
+
+        IrisNyxDriver Driver(UmbraConfig(), Project.RootPath());
+        const Component First = Driver.MountRoot(CounterPath, "Counter", {nyx::runtime::Value(int32_t{10})});
+        const Component Second = Driver.MountRoot(CounterPath, "Counter", {nyx::runtime::Value(int32_t{100})});
+        REQUIRE_TRUE(Driver.Errors().empty());
+        REQUIRE_TRUE(First.Instance != nullptr);
+        REQUIRE_TRUE(Second.Instance != nullptr);
+        REQUIRE_TRUE(First.Instance != Second.Instance);
+
+        const nyx::runtime::Value FirstResult =
+            Driver.InvokeInstanceCallable(First.Instance, "advance", {nyx::runtime::Value(int32_t{3})});
+        const nyx::runtime::Value SecondResult =
+            Driver.InvokeInstanceCallable(Second.Instance, "advance", {nyx::runtime::Value(int32_t{7})});
+        const nyx::runtime::Value FirstAgain =
+            Driver.InvokeInstanceCallable(First.Instance, "advance", {nyx::runtime::Value(int32_t{4})});
+
+        REQUIRE_TRUE(Driver.Errors().empty());
+        ASSERT_EQUAL(std::get<int32_t>(FirstResult.data), int32_t{13});
+        ASSERT_EQUAL(std::get<int32_t>(SecondResult.data), int32_t{107});
+        ASSERT_EQUAL(std::get<int32_t>(FirstAgain.data), int32_t{17});
+    });
+
+    IT("reports a missing component-local callable binding through Errors and returns null", {
+        TempProject Project;
+        const std::string AppPath = Project.Write("App.irisx",
+                                                   "void App() {\n"
+                                                   "    render {\n"
+                                                   "        <Frame />\n"
+                                                   "    }\n"
+                                                   "}\n");
+
+        IrisNyxDriver Driver(UmbraConfig(), Project.RootPath());
+        const Component Root = Driver.MountRoot(AppPath, "App");
+        REQUIRE_TRUE(Driver.Errors().empty());
+
+        const nyx::runtime::Value Result = Driver.InvokeInstanceCallable(Root.Instance, "missing");
+
+        ASSERT_TRUE(Result.Kind() == nyx::runtime::ValueKind::Null);
+        REQUIRE_EQUAL(Driver.Errors().size(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(Driver.Errors().back().Message.find("binding is not declared by this component") != std::string::npos);
+    });
+
+    IT("reports a non-callable component-local binding through Errors and returns null", {
+        TempProject Project;
+        const std::string AppPath = Project.Write("App.irisx",
+                                                   "void App() {\n"
+                                                   "    int count = 42;\n"
+                                                   "    render {\n"
+                                                   "        <Frame />\n"
+                                                   "    }\n"
+                                                   "}\n");
+
+        IrisNyxDriver Driver(UmbraConfig(), Project.RootPath());
+        const Component Root = Driver.MountRoot(AppPath, "App");
+        REQUIRE_TRUE(Driver.Errors().empty());
+
+        const nyx::runtime::Value Result = Driver.InvokeInstanceCallable(Root.Instance, "count");
+
+        ASSERT_TRUE(Result.Kind() == nyx::runtime::ValueKind::Null);
+        REQUIRE_EQUAL(Driver.Errors().size(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(Driver.Errors().back().Message.find("invoking instance binding 'count' failed") != std::string::npos);
+    });
+
     // docs/archive/iris_nyx_runtime_injection_gap_resolved.md: the constructor overload letting a host share
     // one caller-owned nyx::host::NyxRuntime across this driver and a second, independent Nyx
     // integration (e.g. penumbra-proto's Penumbra::Nyx::ApplicationBridge). Proves the shared
