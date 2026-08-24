@@ -78,6 +78,9 @@ public:
         if (Diff.Text) {
             Text = *Diff.Text;
         }
+        if (Diff.OnRelease) {
+            OnRelease = *Diff.OnRelease;
+        }
     }
 
     std::size_t     GetChildCount() const override { return Children.size(); }
@@ -96,6 +99,7 @@ public:
     std::string                                  Tag;
     std::string                                  ClassName;
     std::string                                  Text;
+    std::function<void()>                        OnRelease;
     std::vector<std::unique_ptr<Umbra::IWidget>> Children;
 };
 
@@ -112,6 +116,9 @@ struct TestNode {
 class TestMounter {
 public:
     std::unique_ptr<Umbra::IWidget> operator()(const Component& Node) {
+        if (Node.Tag == IrisElementTag::Native && Node.NativeBuilder) {
+            return Node.NativeBuilder->Build();
+        }
         auto Widget = std::make_unique<MockWidget>(TagName(Node.Tag));
         Widget->ApplyPropDiff(iris::ComputePropDiff({}, Node.Props));
         for (const Component& Child : Node.Children) {
@@ -520,22 +527,44 @@ DESCRIBE("IrisNyxDriver", {
         ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->ClassName == "nonzero");
     });
 
-    IT("a mounted block-bodied list <Slot> subscribes to an array @signal read before its first embedded pick", {
+    IT("a mounted block-bodied list <Slot> grows from one to three cross-file picks in loop order", {
         TempProject Project;
-        Project.Write("Item.irisx",
-                      "void Item(ItemProps props) {\n"
+        Project.Write("Label.irisx",
+                      "void Label(LabelProps props) {\n"
                       "    render {\n"
-                      "        <Frame class={props.label} />\n"
+                      "        <Text class=\"breadcrumb-label\">{props.label}</Text>\n"
+                      "    }\n"
+                      "}\n");
+        Project.Write("Crumb.irisx",
+                      "void Crumb(CrumbProps props) {\n"
+                      "    render {\n"
+                      "        <Frame class=\"breadcrumb-crumb\" onRelease={() -> BreadcrumbJumpTo(props.index)}>\n"
+                      "            <Text class=\"breadcrumb-crumb-label\">{props.label}</Text>\n"
+                      "        </Frame>\n"
+                      "    }\n"
+                      "}\n");
+        Project.Write("Chevron.irisx",
+                      "void Chevron(ChevronProps props) {\n"
+                      "    render {\n"
+                      "        <Native build={() -> \"chevron\"} />\n"
                       "    }\n"
                       "}\n");
         const std::string AppPath = Project.Write("List.irisx",
-                                                   "import Item\n"
+                                                   "import Label\n"
+                                                   "import Crumb\n"
+                                                   "import Chevron\n"
                                                    "\n"
                                                    "void List() {\n"
                                                    "    @signal Array<string> items = [];\n"
-                                                   "    auto populate = () -> {\n"
+                                                   "    auto populateOne = () -> {\n"
                                                    "        Array<string> next = [];\n"
                                                    "        next.Add(\"first\");\n"
+                                                   "        items = next;\n"
+                                                   "    };\n"
+                                                   "    auto populateTwo = () -> {\n"
+                                                   "        Array<string> next = [];\n"
+                                                   "        next.Add(\"first\");\n"
+                                                   "        next.Add(\"second\");\n"
                                                    "        items = next;\n"
                                                    "    };\n"
                                                    "\n"
@@ -546,7 +575,12 @@ DESCRIBE("IrisNyxDriver", {
                                                    "                    Array<Component> result = [];\n"
                                                    "                    int last = items.Size() - 1;\n"
                                                    "                    for (int i = 0; i <= last; i++) {\n"
-                                                   "                        result.Add(<Item label={items[i]} />);\n"
+                                                   "                        if (i == last) {\n"
+                                                   "                            result.Add(<Label label={items[i]} />);\n"
+                                                   "                        } else {\n"
+                                                   "                            result.Add(<Crumb label={items[i]} index={i} />);\n"
+                                                   "                            result.Add(<Chevron />);\n"
+                                                   "                        }\n"
                                                    "                    }\n"
                                                    "                    return result;\n"
                                                    "                }}\n"
@@ -556,6 +590,15 @@ DESCRIBE("IrisNyxDriver", {
                                                    "}\n");
 
         IrisNyxDriver Driver(UmbraConfig(), Project.RootPath());
+        int           JumpIndex = -1;
+        Driver.Runtime().RegisterFunction(
+            "BreadcrumbJumpTo", [&JumpIndex](std::vector<nyx::runtime::Value> Args) -> nyx::runtime::Value {
+                JumpIndex = std::get<int32_t>(Args.at(0).data);
+                return nyx::runtime::Value();
+            });
+        Driver.RegisterNativeBuilder("chevron", []() -> std::unique_ptr<Umbra::IWidget> {
+            return std::make_unique<MockWidget>("Native");
+        });
         const Component RootNode = Driver.MountRoot(AppPath, "List");
         REQUIRE_TRUE(Driver.Errors().empty());
         REQUIRE_TRUE(RootNode.Instance != nullptr);
@@ -565,13 +608,31 @@ DESCRIBE("IrisNyxDriver", {
         auto                             Slots = iris::ResolveSlots(*Root, RootNode, Mount);
         REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(0));
 
-        Driver.InvokeInstanceCallable(RootNode.Instance, "populate");
+        Driver.InvokeInstanceCallable(RootNode.Instance, "populateOne");
         REQUIRE_TRUE(Driver.Errors().empty());
         iris::Tick();
 
         REQUIRE_TRUE(Driver.Errors().empty());
         REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(1));
-        ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->ClassName == "first");
+        ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->Tag == "Text");
+        ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->Text == "first");
+
+        Driver.InvokeInstanceCallable(RootNode.Instance, "populateTwo");
+        REQUIRE_TRUE(Driver.Errors().empty());
+        iris::Tick();
+
+        REQUIRE_TRUE(Driver.Errors().empty());
+        REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(3));
+        MockWidget* Crumb = dynamic_cast<MockWidget*>(Root->GetChildAt(0));
+        REQUIRE_TRUE(Crumb != nullptr);
+        ASSERT_TRUE(Crumb->Tag == "Frame");
+        REQUIRE_EQUAL(Crumb->GetChildCount(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(dynamic_cast<MockWidget*>(Crumb->GetChildAt(0))->Text == "first");
+        REQUIRE_TRUE(Crumb->OnRelease != nullptr);
+        Crumb->OnRelease();
+        ASSERT_TRUE(JumpIndex == 0);
+        ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(1))->Tag == "Native");
+        ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(2))->Text == "second");
     });
 
     IT("reports an error for a component invocation with no matching import", {

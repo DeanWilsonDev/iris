@@ -138,9 +138,9 @@ struct PickBinding {
     std::optional<std::string> Index; // Map's optional 2nd lambda param only; never set for Reduce
 };
 
-// Scans one `Text` segment for a `.Map((param[, indexParam]) -> ` or
-// `.Reduce((acc, param) -> ` lambda that is still *open* at the end of the segment -- i.e. the
-// segment immediately following it (an embedded element) sits inside that lambda's own body.
+// Scans the reconstructed source prefix for a `.Map((param[, indexParam]) -> ` or
+// `.Reduce((acc, param) -> ` lambda that is still *open* at the end of the prefix -- i.e. the
+// embedded element immediately following it sits inside that lambda's own body.
 // docs/archive/iris_nyx_slot_loop_and_reload_gap_resolved.md §1: this can't be pure text substitution,
 // and `Iris::NyxTokenizer` is the wrong tool (it coarsens keywords/strings, losing exact
 // identifier boundaries) -- this tokenizes `Text` directly with nyx-proto's own real
@@ -473,7 +473,7 @@ NyxEvaluator MakeNyxEvaluator(nyx::host::NyxRuntime& Runtime, nyx::host::NyxRunt
         for (const IrNyxExpressionSegment& Seg : Node.Segments) {
             if (Seg.Kind == IrNyxExpressionSegmentKind::Text) {
                 Reconstructed += Seg.Text;
-                Pending = DetectOpenPickBinding(Seg.Text);
+                Pending = DetectOpenPickBinding(Reconstructed);
             } else {
                 if (Pending.has_value()) {
                     Bindings[ElementIndex] = *Pending;
