@@ -340,6 +340,9 @@ private:
     // guessing a same-file function of that name -- every documented `.chaos`/`.irisx` example
     // puts one component per file (chaos-ui-authoring.md §27.1), so an invocation naming a tag
     // with no matching `import` is treated as an authoring mistake, not a same-file call.
+    // Imported free functions whose parameter names exactly match the invocation's attributes
+    // receive those values positionally; every other component retains the existing one-Props-
+    // object calling convention.
     Iris::Component InvokeChildComponent(const std::string& CallerResolvedPath, const std::string& Tag,
                                           const nyx::runtime::Value& Props, const Iris::Component* Previous);
 

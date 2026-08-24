@@ -426,10 +426,11 @@ Iris::Component IrisNyxDriver::InvokeComponent(const std::string& ResolvedPath, 
             nyx::host::NyxRuntime::NyxScope Scope = Runtime_.InvokeComponent(FileScope, FunctionName, std::move(Args));
             if (Scope.error.has_value()) {
                 // Runtime_.InvokeComponent already caught a C++ RuntimeError (typically an
-                // arity mismatch -- every invocation marshals its named attributes into
-                // exactly one Props argument, so a component still declared with the wrong
-                // parameter shape throws here) and handed back `Scope.context` pointing at a
-                // valid but throwaway fresh global scope (NyxScope::error's own doc comment,
+                // arity mismatch -- an invocation whose attributes do not exactly match a
+                // positional free-function signature falls back to one Props argument, so a
+                // component still declared with the wrong parameter shape throws here) and
+                // handed back `Scope.context` pointing at a valid but throwaway fresh global
+                // scope (NyxScope::error's own doc comment,
                 // nyx-runtime.hpp). Surfacing it here, at the mount site, is the whole point
                 // of this check -- without it, `render{}`'s prop expressions go on to
                 // evaluate against that empty scope and fail confusingly several layers
@@ -727,7 +728,42 @@ Iris::Component IrisNyxDriver::InvokeChildComponent(const std::string& CallerRes
     // InvokeComponent's own reload branch builds its own fresh nested-invocation cursor from
     // *this* invocation's own children, so a match here can itself contain further statically-
     // nested matches, propagating to any depth without this function needing to know that.
-    return InvokeComponent(Import->ResolvedPath, Tag, {Props}, Previous, nullptr);
+    std::vector<nyx::runtime::Value> Args{Props};
+
+    // Props-style components remain the default: one ad-hoc object containing every named
+    // attribute. A free function whose parameter names exactly match those attributes is the
+    // positional form used by components that were previously mounted directly through
+    // MountRoot(label, index). Match by name rather than type/name convention so zero-argument
+    // imports and arbitrary positional parameter names work without special cases, while an
+    // extra/missing attribute still reaches InvokeComponent as the existing attributable arity
+    // error instead of being silently ignored.
+    const IrisIrDocument* ChildDocument = LoadDocument(Import->ResolvedPath);
+    if (ChildDocument == nullptr) {
+        return Iris::Component{nullptr};
+    }
+    nyx::host::NyxRuntime::NyxScope& ChildFileScope = GetFileScope(Import->ResolvedPath, *ChildDocument);
+    const auto FunctionIt = ChildFileScope.interpreter->Registry().functions.find(Tag);
+    if (FunctionIt != ChildFileScope.interpreter->Registry().functions.end() &&
+        Props.Kind() == nyx::runtime::ValueKind::Object) {
+        const auto& PropsObject = std::get<std::shared_ptr<nyx::runtime::NyxObject>>(Props.data);
+        if (PropsObject != nullptr && FunctionIt->second->params.size() == PropsObject->adHocFields.size()) {
+            std::vector<nyx::runtime::Value> Positional;
+            Positional.reserve(FunctionIt->second->params.size());
+            for (const nyx::ast::ParamDecl& Param : FunctionIt->second->params) {
+                const nyx::runtime::Value* Value = PropsObject->FindFieldByName(Param.name);
+                if (Value == nullptr) {
+                    Positional.clear();
+                    break;
+                }
+                Positional.push_back(*Value);
+            }
+            if (Positional.size() == FunctionIt->second->params.size()) {
+                Args = std::move(Positional);
+            }
+        }
+    }
+
+    return InvokeComponent(Import->ResolvedPath, Tag, std::move(Args), Previous, nullptr);
 }
 
 Iris::Component IrisNyxDriver::MountRoot(const std::string& EntryResolvedPath, const std::string& EntryFunctionName,

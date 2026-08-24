@@ -115,7 +115,13 @@ struct TestNode {
 
 class TestMounter {
 public:
+    explicit TestMounter(std::vector<std::string>* MountedInvocations = nullptr)
+        : MountedInvocations_(MountedInvocations) {}
+
     std::unique_ptr<Umbra::IWidget> operator()(const Component& Node) {
+        if (MountedInvocations_ != nullptr && Node.InvocationTag.has_value()) {
+            MountedInvocations_->push_back(*Node.InvocationTag);
+        }
         if (Node.Tag == IrisElementTag::Native && Node.NativeBuilder) {
             return Node.NativeBuilder->Build();
         }
@@ -131,6 +137,8 @@ public:
     }
 
 private:
+    std::vector<std::string>* MountedInvocations_;
+
     static std::string TagName(IrisElementTag Tag) {
         switch (Tag) {
             case IrisElementTag::Frame:
@@ -527,24 +535,24 @@ DESCRIBE("IrisNyxDriver", {
         ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->ClassName == "nonzero");
     });
 
-    IT("a mounted block-bodied list <Slot> grows from one to three cross-file picks in loop order", {
+    IT("a mounted block-bodied list <Slot> grows from one to three imported component picks in loop order", {
         TempProject Project;
         Project.Write("Label.irisx",
-                      "void Label(LabelProps props) {\n"
+                      "void Label(string label) {\n"
                       "    render {\n"
-                      "        <Text class=\"breadcrumb-label\">{props.label}</Text>\n"
+                      "        <Text class=\"breadcrumb-label\">{label}</Text>\n"
                       "    }\n"
                       "}\n");
         Project.Write("Crumb.irisx",
-                      "void Crumb(CrumbProps props) {\n"
+                      "void Crumb(string label, int index) {\n"
                       "    render {\n"
-                      "        <Frame class=\"breadcrumb-crumb\" onRelease={() -> BreadcrumbJumpTo(props.index)}>\n"
-                      "            <Text class=\"breadcrumb-crumb-label\">{props.label}</Text>\n"
+                      "        <Frame class=\"breadcrumb-crumb\" onRelease={() -> BreadcrumbJumpTo(index)}>\n"
+                      "            <Text class=\"breadcrumb-crumb-label\">{label}</Text>\n"
                       "        </Frame>\n"
                       "    }\n"
                       "}\n");
         Project.Write("Chevron.irisx",
-                      "void Chevron(ChevronProps props) {\n"
+                      "void Chevron() {\n"
                       "    render {\n"
                       "        <Native build={() -> \"chevron\"} />\n"
                       "    }\n"
@@ -603,7 +611,8 @@ DESCRIBE("IrisNyxDriver", {
         REQUIRE_TRUE(Driver.Errors().empty());
         REQUIRE_TRUE(RootNode.Instance != nullptr);
 
-        iris::MountFn                   Mount = TestMounter();
+        std::vector<std::string>        MountedInvocations;
+        iris::MountFn                   Mount = TestMounter(&MountedInvocations);
         std::unique_ptr<Umbra::IWidget> Root  = Mount(RootNode);
         auto                             Slots = iris::ResolveSlots(*Root, RootNode, Mount);
         REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(0));
@@ -614,6 +623,8 @@ DESCRIBE("IrisNyxDriver", {
 
         REQUIRE_TRUE(Driver.Errors().empty());
         REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(1));
+        REQUIRE_EQUAL(MountedInvocations.size(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(MountedInvocations[0] == "Label");
         ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->Tag == "Text");
         ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->Text == "first");
 
@@ -623,6 +634,9 @@ DESCRIBE("IrisNyxDriver", {
 
         REQUIRE_TRUE(Driver.Errors().empty());
         REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(3));
+        REQUIRE_EQUAL(MountedInvocations.size(), static_cast<std::size_t>(3));
+        ASSERT_TRUE(MountedInvocations[1] == "Crumb");
+        ASSERT_TRUE(MountedInvocations[2] == "Chevron");
         MockWidget* Crumb = dynamic_cast<MockWidget*>(Root->GetChildAt(0));
         REQUIRE_TRUE(Crumb != nullptr);
         ASSERT_TRUE(Crumb->Tag == "Frame");
@@ -652,8 +666,9 @@ DESCRIBE("IrisNyxDriver", {
 
     // docs/next-steps.md's "IrisNyxDriver::InvokeComponent never checks NyxScope::error" entry
     // (2026-08-19, cross-repo ask from pharos-proto): every component invocation marshals its
-    // named attributes into exactly one Props argument, so a component still declared with the
-    // wrong parameter shape for how it's now invoked (here, zero params) throws a C++
+    // named attributes fall back to exactly one Props argument unless they match every positional
+    // parameter by name, so a component still declared with the wrong parameter shape for how
+    // it's now invoked (here, zero params but one unmatched attribute) throws a C++
     // RuntimeError arity mismatch inside Runtime_.InvokeComponent -- which nyx-proto's own
     // NyxRuntime::InvokeComponent already catches and reports via NyxScope::error, but this
     // repo's fresh-mount branch previously never checked it, silently proceeding to build
