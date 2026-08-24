@@ -426,12 +426,13 @@ PropValue RenderBlockParser::ParseJsxEscapeHatch() {
         }
 
         // A JSX element start is disambiguated from a template angle bracket
-        // (`std::vector<Component>` has exactly the same `< Identifier >`
-        // shape as an attribute-less opening tag) by requiring whitespace
-        // before the `<` — every JSX use in the spec is written with a space
-        // or newline before it (`return <Frame ...`, `push_back(\n <Frame
-        // ...`), while a template argument list never has one.
-        if (IsPunct('<') && Current_.PrecededByWhitespace && PeekNext().Kind == GKind::Identifier) {
+        // (`Array<Component>` has exactly the same `< Identifier >` shape as
+        // an attribute-less opening tag) by requiring either whitespace before
+        // the `<`, or an immediately preceding `(`. The latter is the ordinary
+        // block-bodied list form `result.Add(<Row />)`: a template's `<` follows
+        // its type identifier, never the argument-list delimiter itself.
+        const bool CanStartJsx = Current_.PrecededByWhitespace || (!TextBuffer.empty() && TextBuffer.back() == '(');
+        if (IsPunct('<') && CanStartJsx && PeekNext().Kind == GKind::Identifier) {
             TextBuffer += ' ';
             FlushText();
             const SourceLocation LAngleLocation = Current_.Location;

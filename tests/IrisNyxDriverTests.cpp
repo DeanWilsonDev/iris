@@ -520,6 +520,60 @@ DESCRIBE("IrisNyxDriver", {
         ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->ClassName == "nonzero");
     });
 
+    IT("a mounted block-bodied list <Slot> subscribes to an array @signal read before its first embedded pick", {
+        TempProject Project;
+        Project.Write("Item.irisx",
+                      "void Item(ItemProps props) {\n"
+                      "    render {\n"
+                      "        <Frame class={props.label} />\n"
+                      "    }\n"
+                      "}\n");
+        const std::string AppPath = Project.Write("List.irisx",
+                                                   "import Item\n"
+                                                   "\n"
+                                                   "void List() {\n"
+                                                   "    @signal Array<string> items = [];\n"
+                                                   "    auto populate = () -> {\n"
+                                                   "        Array<string> next = [];\n"
+                                                   "        next.Add(\"first\");\n"
+                                                   "        items = next;\n"
+                                                   "    };\n"
+                                                   "\n"
+                                                   "    render {\n"
+                                                   "        <Frame>\n"
+                                                   "            <Slot>\n"
+                                                   "                !{() -> {\n"
+                                                   "                    Array<Component> result = [];\n"
+                                                   "                    int last = items.Size() - 1;\n"
+                                                   "                    for (int i = 0; i <= last; i++) {\n"
+                                                   "                        result.Add(<Item label={items[i]} />);\n"
+                                                   "                    }\n"
+                                                   "                    return result;\n"
+                                                   "                }}\n"
+                                                   "            </Slot>\n"
+                                                   "        </Frame>\n"
+                                                   "    }\n"
+                                                   "}\n");
+
+        IrisNyxDriver Driver(UmbraConfig(), Project.RootPath());
+        const Component RootNode = Driver.MountRoot(AppPath, "List");
+        REQUIRE_TRUE(Driver.Errors().empty());
+        REQUIRE_TRUE(RootNode.Instance != nullptr);
+
+        iris::MountFn                   Mount = TestMounter();
+        std::unique_ptr<Umbra::IWidget> Root  = Mount(RootNode);
+        auto                             Slots = iris::ResolveSlots(*Root, RootNode, Mount);
+        REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(0));
+
+        Driver.InvokeInstanceCallable(RootNode.Instance, "populate");
+        REQUIRE_TRUE(Driver.Errors().empty());
+        iris::Tick();
+
+        REQUIRE_TRUE(Driver.Errors().empty());
+        REQUIRE_EQUAL(Root->GetChildCount(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(dynamic_cast<MockWidget*>(Root->GetChildAt(0))->ClassName == "first");
+    });
+
     IT("reports an error for a component invocation with no matching import", {
         TempProject Project;
         const std::string ParentPath = Project.Write("Orphan.irisx",

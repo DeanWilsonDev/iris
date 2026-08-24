@@ -129,11 +129,11 @@ Value InvokeAsLambda(nyx::host::NyxRuntime& Runtime, nyx::host::NyxRuntime::NyxS
     return Runtime.EvaluateInScope(Scope, Call);
 }
 
-// Which identifier(s) a `.Map()`/`.Reduce()` callback's own lambda parameters bind an embedded
+// Which identifier(s) a `.Map()`/`.Reduce()` callback or block-bodied `for` loop binds an embedded
 // element's current item/iteration-index to -- extracted once at reconstruction time so
 // `EvaluateSlot` can inject them into the `__chaos_slot_pick` marker call, and again to know
 // what to `Define` in a per-pick scope afterward.
-struct MapReduceBinding {
+struct PickBinding {
     std::string                Item;
     std::optional<std::string> Index; // Map's optional 2nd lambda param only; never set for Reduce
 };
@@ -146,7 +146,7 @@ struct MapReduceBinding {
 // identifier boundaries) -- this tokenizes `Text` directly with nyx-proto's own real
 // `nyx::Lexer`, the same tool `NyxTokenizer.cpp` itself wraps, and walks its token stream the
 // same way `Parser::ParseParenOrLambda`'s own lambda-param scan does on nyx-proto's own side.
-std::optional<MapReduceBinding> DetectOpenMapReduceLambda(const std::string& Text) {
+std::optional<PickBinding> DetectOpenPickBinding(const std::string& Text) {
     nyx::Lexer               Lexer{Text};
     std::vector<nyx::Token> Tokens;
     try {
@@ -158,7 +158,7 @@ std::optional<MapReduceBinding> DetectOpenMapReduceLambda(const std::string& Tex
         return std::nullopt;
     }
 
-    std::optional<MapReduceBinding> Result;
+    std::optional<PickBinding> Result;
     for (std::size_t I = 0; I < Tokens.size(); ++I) {
         if (Tokens[I].kind != nyx::TokenKind::Dot || I + 1 >= Tokens.size() ||
             Tokens[I + 1].kind != nyx::TokenKind::Identifier) {
@@ -245,7 +245,7 @@ std::optional<MapReduceBinding> DetectOpenMapReduceLambda(const std::string& Tex
         }
         ++J; // `->`
 
-        MapReduceBinding Binding;
+        PickBinding Binding;
         if (IsMap) {
             Binding.Item = Params[0];
             if (Params.size() > 1) {
@@ -276,6 +276,47 @@ std::optional<MapReduceBinding> DetectOpenMapReduceLambda(const std::string& Tex
         }
         if (StillOpen) {
             Result = Binding; // the closest-to-the-end open call wins
+        }
+    }
+
+    // A block-bodied list commonly accumulates picks as
+    // `for (int i = ...; ...) { result.Add(<Row value={items[i]} />); }`. Conversion happens
+    // after the slot lambda returns, when `i`'s loop environment is gone, so carry that value
+    // through the marker exactly like a Map callback parameter. Only consider a `for` whose
+    // body brace remains open at this text/element boundary.
+    for (std::size_t I = 0; I < Tokens.size(); ++I) {
+        if (Tokens[I].kind != nyx::TokenKind::For || I + 1 >= Tokens.size() ||
+            Tokens[I + 1].kind != nyx::TokenKind::LParen) {
+            continue;
+        }
+
+        std::string LoopVariable;
+        std::size_t J = I + 2;
+        for (; J < Tokens.size() && Tokens[J].kind != nyx::TokenKind::Semicolon; ++J) {
+            if (Tokens[J].kind == nyx::TokenKind::Identifier) {
+                LoopVariable = Tokens[J].lexeme;
+            }
+        }
+        if (LoopVariable.empty() || J == Tokens.size()) {
+            continue;
+        }
+        while (J < Tokens.size() && Tokens[J].kind != nyx::TokenKind::LBrace) {
+            ++J;
+        }
+        if (J == Tokens.size()) {
+            continue;
+        }
+
+        int BraceDepth = 0;
+        for (; J < Tokens.size(); ++J) {
+            if (Tokens[J].kind == nyx::TokenKind::LBrace) {
+                ++BraceDepth;
+            } else if (Tokens[J].kind == nyx::TokenKind::RBrace) {
+                --BraceDepth;
+            }
+        }
+        if (BraceDepth > 0) {
+            Result = PickBinding{LoopVariable, std::nullopt};
         }
     }
     return Result;
@@ -425,14 +466,14 @@ NyxEvaluator MakeNyxEvaluator(nyx::host::NyxRuntime& Runtime, nyx::host::NyxRunt
             return std::vector<Iris::Component>{};
         }
 
-        std::string                              Reconstructed;
-        std::size_t                              ElementIndex = 0;
-        std::unordered_map<std::size_t, MapReduceBinding> Bindings;
-        std::optional<MapReduceBinding>          Pending;
+        std::string                                  Reconstructed;
+        std::size_t                                  ElementIndex = 0;
+        std::unordered_map<std::size_t, PickBinding> Bindings;
+        std::optional<PickBinding>                   Pending;
         for (const IrNyxExpressionSegment& Seg : Node.Segments) {
             if (Seg.Kind == IrNyxExpressionSegmentKind::Text) {
                 Reconstructed += Seg.Text;
-                Pending = DetectOpenMapReduceLambda(Seg.Text);
+                Pending = DetectOpenPickBinding(Seg.Text);
             } else {
                 if (Pending.has_value()) {
                     Bindings[ElementIndex] = *Pending;

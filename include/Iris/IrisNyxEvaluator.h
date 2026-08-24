@@ -109,12 +109,13 @@ using NativeBuilderLookup = std::function<std::function<std::unique_ptr<Umbra::I
 // afterward -- exactly the element(s) the escape hatch's own Nyx-side conditional logic
 // selected, in call order.
 // A single `__chaos_slot_pick` call's own recorded data -- which element index was picked,
-// plus (only when the picked element came from a `.Map()`/`.Reduce()` callback -- see
+// plus (when the picked element came from a `.Map()`/`.Reduce()` callback or a block-bodied
+// `for` loop -- see
 // `MakeNyxEvaluator`'s own `EvaluateSlot` doc comment and
 // docs/archive/iris_nyx_slot_loop_and_reload_gap_resolved.md §1) the current element/iteration-index
 // `Value` that callback's lambda parameter(s) were bound to for this call, carried out here so
 // a later `Convert` call can bind them into a fresh per-pick scope -- `item`/`index` only ever
-// existed inside the `.Map()`/`.Reduce()` callback's own call-frame `Environment`, gone by the
+// existed inside the callback/loop's own `Environment`, gone by the
 // time this marker call returns.
 struct ChaosSlotPick {
     std::size_t                          ElementIndex{0};
