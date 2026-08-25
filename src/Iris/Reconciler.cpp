@@ -203,7 +203,12 @@ std::vector<std::unique_ptr<Umbra::IWidget>> ReconcileList(std::vector<std::uniq
         }
     }
     // Unmatched entries in OldWidgets were never moved-from and destruct here,
-    // releasing whatever real widget they wrapped — correct unmount.
+    // releasing whatever real widget they wrapped — prepare any portals first.
+    for (std::size_t OldIndex = 0; OldIndex < OldWidgets.size(); ++OldIndex) {
+        if (!Match.OldMatched[OldIndex]) {
+            Iris::PreparePortalSubtreeForUnmount(OldWidgets[OldIndex].get());
+        }
+    }
     return Result;
 }
 
@@ -232,11 +237,50 @@ std::vector<Iris::Component> FilterOrdinary(const std::vector<Iris::Component>& 
 // through a non-owning reference instead of `ReconcileWidget`'s `unique_ptr&`.
 void ReconcileMatchedInPlace(Umbra::IWidget& Widget, const Iris::Component& Old, const Iris::Component& New,
                              const MountFn& Mount) {
+    if (New.Tag == Iris::IrisElementTag::Portal) {
+        if (auto* Portal = dynamic_cast<Iris::IPortalTarget*>(&Widget)) {
+            Portal->ApplyPortalProperties(Iris::ReadPortalProperties(New.Props));
+        }
+    }
     Widget.ApplyPropDiff(ComputePropDiff(Old.Props, New.Props));
     ReconcileChildrenAt(Widget, 0, FilterOrdinary(Old.Children), FilterOrdinary(New.Children), Mount);
 }
 
 } // namespace
+
+} // namespace iris
+
+namespace Iris {
+
+void PreparePortalSubtreeForUnmount(Umbra::IWidget* Root) {
+    if (Root == nullptr) return;
+
+    for (std::size_t Index = 0; Index < Root->GetChildCount(); ++Index) {
+        PreparePortalSubtreeForUnmount(Root->GetChildAt(Index));
+    }
+    if (auto* Portal = dynamic_cast<IPortalTarget*>(Root)) {
+        Portal->PreparePortalUnmount();
+    }
+}
+
+PortalProperties ReadPortalProperties(const IrisProps& Props) {
+    PortalProperties Result;
+    auto Read = [&Props]<typename T>(const char* Name) -> const T* {
+        const auto It = Props.find(Name);
+        return It == Props.end() ? nullptr : std::get_if<T>(&It->second);
+    };
+    if (const auto* Value = Read.operator()<float>("x")) Result.X = *Value;
+    if (const auto* Value = Read.operator()<float>("y")) Result.Y = *Value;
+    if (const auto* Value = Read.operator()<float>("width")) Result.Width = *Value;
+    if (const auto* Value = Read.operator()<float>("height")) Result.Height = *Value;
+    if (const auto* Value = Read.operator()<bool>("dismissOnOutsideClick")) Result.DismissOnOutsideClick = *Value;
+    if (const auto* Value = Read.operator()<std::function<void()>>("onDismiss")) Result.OnDismiss = *Value;
+    return Result;
+}
+
+} // namespace Iris
+
+namespace iris {
 
 Umbra::IrisPropDiff ComputePropDiff(const Iris::IrisProps& Old, const Iris::IrisProps& New) {
     Umbra::IrisPropDiff Diff;
@@ -257,12 +301,15 @@ Umbra::IrisPropDiff ComputePropDiff(const Iris::IrisProps& Old, const Iris::Iris
 void ReconcileWidget(std::unique_ptr<Umbra::IWidget>& Widget, const Iris::Component& Old,
                       const Iris::Component& New, const MountFn& Mount) {
     if (New.Tag == Iris::IrisElementTag::None) {
+        Iris::PreparePortalSubtreeForUnmount(Widget.get());
         Widget.reset();
         return;
     }
 
     const bool SameIdentity = Old.Tag == New.Tag && KeysEqual(Old.Key, New.Key);
     if (!SameIdentity) {
+        Iris::PreparePortalSubtreeForUnmount(Widget.get());
+        Widget.reset();
         Widget = Mount(New);
         return;
     }
@@ -304,6 +351,8 @@ void ReconcileChildrenAt(Umbra::IWidget& Parent, std::size_t Base,
         std::unique_ptr<Umbra::IWidget> Removed = Parent.RemoveChildAt(Base + Reverse);
         if (Match.OldMatched[Reverse]) {
             MovedOld[Reverse] = std::move(Removed);
+        } else {
+            Iris::PreparePortalSubtreeForUnmount(Removed.get());
         }
     }
 

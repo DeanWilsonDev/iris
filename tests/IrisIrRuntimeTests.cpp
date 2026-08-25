@@ -185,6 +185,30 @@ DESCRIBE("IrisIrRuntime", {
         ASSERT_FALSE(Errors.empty());
     });
 
+    IT("converts a .irisx Portal with one child and all backend-neutral props", {
+        IrElementNode Node = MakeElement(
+            "Portal",
+            {MakeExprProp("x", "10.0"), MakeExprProp("y", "20.0"), MakeExprProp("width", "200.0"),
+             MakeExprProp("height", "120.0"), MakeExprProp("dismissOnOutsideClick", "true"),
+             MakeExprProp("onDismiss", "closeMenu")},
+            {MakeElementChild(MakeElement("Frame"))});
+        std::vector<IrisIrRuntimeError> Errors;
+        Component Result = ConvertIrElement(Node, MakeEvaluator(), &Errors);
+        ASSERT_TRUE(Errors.empty());
+        ASSERT_TRUE(Result.Tag == IrisElementTag::Portal);
+        REQUIRE_EQUAL(Result.Children.size(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(Result.Children[0].Tag == IrisElementTag::Frame);
+        ASSERT_TRUE(std::holds_alternative<float>(Result.Props.at("x")));
+        ASSERT_TRUE(std::holds_alternative<bool>(Result.Props.at("dismissOnOutsideClick")));
+        ASSERT_TRUE(std::holds_alternative<std::function<void()>>(Result.Props.at("onDismiss")));
+    });
+
+    IT("a .irisx Portal requires exactly one element child", {
+        std::vector<IrisIrRuntimeError> Errors;
+        ConvertIrElement(MakeElement("Portal"), MakeEvaluator(), &Errors);
+        ASSERT_FALSE(Errors.empty());
+    });
+
     IT("<Inline> mixes element, literal-text, and interpolated children -- both text kinds "
        "become synthetic Text components",
        {

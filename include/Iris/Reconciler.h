@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Iris/Component.h"
+#include "Iris/Portal.h"
 #include "Iris/SlotRuntime.h"
 
 #include "Umbra/IWidget.h"

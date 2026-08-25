@@ -75,6 +75,10 @@ enum class IrisElementTag {
     // React. No reconciler change was needed for this; it was already load-bearing,
     // just unexercised and undocumented until now.
     Native,
+    // Mounts exactly one ordinary declarative child through a backend-selected target
+    // outside its normal visual parent. Placement and dismissal remain backend-neutral;
+    // see Portal.h. Unlike <Native>, its child is ordinary reconciled Component IR.
+    Portal,
     // A draggable-handle resizable split (docs/archive/iris_next_steps_resolved.md, "No layout-container
     // primitive beyond Frame's three stack modes") — exactly two element children
     // (leading/trailing panes, matching `Penumbra::Widgets::SplitPanel::SetFirst`/

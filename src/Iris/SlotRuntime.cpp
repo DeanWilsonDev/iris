@@ -107,7 +107,8 @@ SlotState::~SlotState() {
         AttachedParentWatch_.AssertAlive("SlotState::AttachedParent_");
         const std::size_t Base = AttachedGroup_->AbsoluteIndexOf(AttachedGroupIndex_);
         for (std::size_t I = 0; I < AttachedCount_; ++I) {
-            AttachedParent_->RemoveChildAt(Base);
+            std::unique_ptr<Umbra::IWidget> Removed = AttachedParent_->RemoveChildAt(Base);
+            Iris::PreparePortalSubtreeForUnmount(Removed.get());
         }
         // From here on, a sibling still to be destroyed (in either direction — nothing
         // requires group-order teardown) must not dereference this now-about-to-be-freed

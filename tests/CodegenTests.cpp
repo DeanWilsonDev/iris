@@ -394,6 +394,42 @@ DESCRIBE("Codegen", {
         // both panes are ordinary Children entries, leading pane first
     });
 
+    IT("a Portal with one child and all props codegens as ordinary Component IR", {
+        const auto Result = Generate(R"(render {
+            <Portal key="menu" x={10.0f} y={20.0f} width={200.0f} height={120.0f}
+                    dismissOnOutsideClick={true} onDismiss={[&]() { closeMenu(); }}>
+                <Frame class="menu" />
+            </Portal>
+        })");
+        ASSERT_TRUE(Result.Errors.empty());
+        ASSERT_TRUE(Contains(Result.Source, "Iris::IrisElementTag::Portal"));
+        ASSERT_TRUE(Contains(Result.Source, "{\"x\", Iris::IrisPropValue{std::in_place_type<float>, 10.0f}}"));
+        ASSERT_TRUE(Contains(Result.Source, "{\"dismissOnOutsideClick\", Iris::IrisPropValue{std::in_place_type<bool>, true}}"));
+        ASSERT_TRUE(Contains(Result.Source, "{\"onDismiss\", Iris::IrisPropValue{std::in_place_type<std::function<void()>>"));
+        ASSERT_TRUE(Contains(Result.Source, "Iris::IrisElementTag::Frame"));
+        ASSERT_TRUE(Contains(Result.Source, "Node.Key = Iris::IrisPropValue(\"menu\")"));
+    });
+
+    IT("a Portal requires exactly one element child", {
+        ASSERT_FALSE(Generate(R"(render { <Portal /> })").Errors.empty());
+        ASSERT_FALSE(Generate(R"(render { <Portal><Frame /><Frame /></Portal> })").Errors.empty());
+        ASSERT_FALSE(Generate(R"(render { <Portal>text</Portal> })").Errors.empty());
+    });
+
+    IT("a Portal child remains ordinary IR with nested component and Slot content", {
+        const auto Result = Generate(R"(render {
+            <Portal>
+                <Frame>
+                    <Slot>!{[&]() -> Iris::Component { return <Menu />; }}</Slot>
+                </Frame>
+            </Portal>
+        })");
+        ASSERT_TRUE(Result.Errors.empty());
+        ASSERT_TRUE(Contains(Result.Source, "Iris::IrisElementTag::Portal"));
+        ASSERT_TRUE(Contains(Result.Source, "Iris::MakeSlotCallable"));
+        ASSERT_TRUE(Contains(Result.Source, "return Menu(MenuProps{})"));
+    });
+
     IT("a Split with one child is an error", {
         const auto Result = Generate(R"(render { <Split><Frame class="only" /></Split> })");
         ASSERT_FALSE(Result.Errors.empty()); // <Split> requires exactly two children, not one

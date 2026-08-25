@@ -25,7 +25,7 @@ Iris::IrisElementTag TagNameToElementTag(const std::string& Tag) {
         {"Icon", Iris::IrisElementTag::Icon},     {"Text", Iris::IrisElementTag::Text},
         {"Scroll", Iris::IrisElementTag::Scroll}, {"Input", Iris::IrisElementTag::Input},
         {"Slot", Iris::IrisElementTag::Slot},     {"Native", Iris::IrisElementTag::Native},
-        {"Split", Iris::IrisElementTag::Split},
+        {"Portal", Iris::IrisElementTag::Portal}, {"Split", Iris::IrisElementTag::Split},
     };
     // Only ever called for a Tag already found in CorePrimitiveTagNames() -- the Frame
     // fallback is unreachable in practice, kept only so this has a defined return on every
@@ -291,6 +291,11 @@ Iris::Component ConvertIrElement(const IrElementNode& Node, const NyxEvaluator& 
         } else if (Node.Tag == "Split") {
             if (Node.Children.size() != 2) {
                 AddError(Errors, "<Split> requires exactly two children (leading and trailing panes)", Node.Location);
+            }
+            Base = ConvertOrdinaryPrimitive(Node, Evaluator, Errors);
+        } else if (Node.Tag == "Portal") {
+            if (Node.Children.size() != 1 || Node.Children[0].Kind != IrElementChildKind::Element) {
+                AddError(Errors, "<Portal> requires exactly one element child", Node.Location);
             }
             Base = ConvertOrdinaryPrimitive(Node, Evaluator, Errors);
         } else {

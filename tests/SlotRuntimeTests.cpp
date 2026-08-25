@@ -1,6 +1,7 @@
 #include "cimmerian/test.hpp"
 
 #include "Iris/Signal.h"
+#include "Iris/Portal.h"
 #include "Iris/SlotRuntime.h"
 
 #include <csignal>
@@ -104,6 +105,39 @@ public:
 
     std::vector<std::unique_ptr<Umbra::IWidget>> Children;
 };
+
+int  SlotPortalPrepareCount = 0;
+bool SlotPortalDestroyedWithoutPrepare = false;
+
+class SlotPortalWidget : public ContainerWidget, public Iris::IPortalTarget {
+public:
+    ~SlotPortalWidget() override {
+        if (!Prepared) SlotPortalDestroyedWithoutPrepare = true;
+    }
+
+    void ApplyPortalProperties(const Iris::PortalProperties&) override {}
+    void PreparePortalUnmount() override {
+        if (Prepared) return;
+        Prepared = true;
+        ++SlotPortalPrepareCount;
+    }
+
+private:
+    bool Prepared{false};
+};
+
+iris::MountFn PortalAwareMount() {
+    return [](const Iris::Component& Node) -> std::unique_ptr<Umbra::IWidget> {
+        if (Node.Tag == Iris::IrisElementTag::Portal) {
+            return std::make_unique<SlotPortalWidget>();
+        }
+        return std::make_unique<ContainerWidget>();
+    };
+}
+
+Iris::Component MakePortalNode() {
+    return Iris::Component(Iris::IrisElementTag::Portal, {}, {}, nullptr);
+}
 
 // A real backend's MountFn (SlotRuntime.h's own doc comment: "Supplied by whoever
 // embeds Iris, e.g. iris-penumbra-backend") is the only place Component::NativeBuilder
@@ -351,6 +385,25 @@ DESCRIBE("SlotRuntime", {
            // object -- not just prop-updated -- exactly what a backend's own reconciler
            // needs to pick up and treat as "the live real widget was replaced".
        });
+
+    IT("destroying an attached Slot prepares a Portal output before releasing it", {
+        SlotPortalPrepareCount = 0;
+        SlotPortalDestroyedWithoutPrepare = false;
+        ContainerWidget Parent;
+        {
+            auto Callable = Iris::MakeSlotCallable([]() -> Iris::Component { return MakePortalNode(); });
+            iris::SlotState Slot(Callable, PortalAwareMount());
+            auto Group = std::make_shared<iris::SlotSiblingGroup>();
+            Group->AddEntry(0, &Slot);
+            Slot.AttachToGroup(&Parent, Group, 0);
+            Slot.Reconcile();
+            ASSERT_EQUAL(Parent.GetChildCount(), static_cast<std::size_t>(1));
+        }
+
+        ASSERT_EQUAL(SlotPortalPrepareCount, 1);
+        ASSERT_FALSE(SlotPortalDestroyedWithoutPrepare);
+        ASSERT_EQUAL(Parent.GetChildCount(), static_cast<std::size_t>(0));
+    });
 
     // docs/next-steps.md's "SlotState::AttachedParent_ dangles past its own widget tree's
     // destruction" entry: reproduces the exact destruction-order mistake that used to crash

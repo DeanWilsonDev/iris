@@ -2,6 +2,7 @@
 
 #include "Iris/Reconciler.h"
 
+#include <algorithm>
 #include <set>
 #include <string>
 
@@ -19,6 +20,7 @@ int           NextWidgetId = 0;
 // InsertChildAt calls, not merely on the end result being correct.
 int RemoveChildAtCallCount = 0;
 int InsertChildAtCallCount = 0;
+std::vector<std::string> PortalLifetimeEvents;
 
 class MockWidget : public Umbra::IWidget {
 public:
@@ -58,6 +60,39 @@ public:
     std::vector<std::unique_ptr<Umbra::IWidget>>  Children;
 };
 
+class MockPortalTarget : public MockWidget, public Iris::IPortalTarget {
+public:
+    MockPortalTarget() : MockWidget("Portal") {}
+    ~MockPortalTarget() override {
+        if (!Prepared) {
+            PortalLifetimeEvents.push_back("destroyed-without-prepare");
+        }
+        PortalLifetimeEvents.push_back("adapter-destroyed");
+    }
+
+    void ApplyPortalProperties(const Iris::PortalProperties& NewProperties) override {
+        Properties = NewProperties;
+        PortalLifetimeEvents.push_back("props-applied");
+    }
+
+    void PreparePortalUnmount() override {
+        if (Prepared) return;
+        Prepared = true;
+        PortalLifetimeEvents.push_back("slot-state-destroyed");
+        Children.clear();
+        PortalLifetimeEvents.push_back("content-destroyed");
+    }
+
+    void DismissSynchronously() {
+        const std::function<void()> OnDismiss = Properties.OnDismiss;
+        Iris::PreparePortalSubtreeForUnmount(this);
+        if (OnDismiss) OnDismiss();
+    }
+
+    Iris::PortalProperties Properties;
+    bool Prepared{false};
+};
+
 std::string TagName(Iris::IrisElementTag Tag) {
     switch (Tag) {
         case Iris::IrisElementTag::Frame:
@@ -74,6 +109,8 @@ std::string TagName(Iris::IrisElementTag Tag) {
             return "Text";
         case Iris::IrisElementTag::Slot:
             return "Slot";
+        case Iris::IrisElementTag::Portal:
+            return "Portal";
         case Iris::IrisElementTag::None:
             return "None";
     }
@@ -99,7 +136,14 @@ public:
         if (MountCount_ != nullptr) {
             ++*MountCount_;
         }
-        auto Widget = std::make_unique<MockWidget>(TagName(Node.Tag));
+        std::unique_ptr<MockWidget> Widget;
+        if (Node.Tag == Iris::IrisElementTag::Portal) {
+            auto Portal = std::make_unique<MockPortalTarget>();
+            Portal->ApplyPortalProperties(Iris::ReadPortalProperties(Node.Props));
+            Widget = std::move(Portal);
+        } else {
+            Widget = std::make_unique<MockWidget>(TagName(Node.Tag));
+        }
         Umbra::IrisPropDiff Diff = iris::ComputePropDiff({}, Node.Props);
         Widget->ApplyPropDiff(Diff);
         for (const Iris::Component& Child : Node.Children) {
@@ -243,6 +287,170 @@ DESCRIBE("Reconciler", {
         ASSERT_EQUAL(AsMockChild->Id, ChildId);
         // the child widget's identity is preserved across the parent's own reconcile
         ASSERT_TRUE(AsMockChild->Text == "updated"); // and the child's own prop diff was applied
+    });
+
+    IT("a matched Portal updates placement and its ordinary child in place", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        Iris::IrisProps OldProps({{"x", Iris::IrisPropValue{1.0f}}});
+        auto Old = MakeNode(Iris::IrisElementTag::Portal, OldProps,
+                            {MakeNode(Iris::IrisElementTag::Text, {{"text", Iris::IrisPropValue{std::string("old")}}})},
+                            Iris::IrisPropValue{std::string("menu")});
+        std::unique_ptr<Umbra::IWidget> Widget;
+        iris::ReconcileWidget(Widget, Iris::Component(nullptr), Old, Mount);
+        auto* Portal = dynamic_cast<MockPortalTarget*>(Widget.get());
+        const int ChildId = dynamic_cast<MockWidget*>(Portal->GetChildAt(0))->Id;
+
+        Iris::IrisProps NewProps(
+            {{"x", Iris::IrisPropValue{9.0f}}, {"width", Iris::IrisPropValue{80.0f}}});
+        auto New = MakeNode(Iris::IrisElementTag::Portal, NewProps,
+                            {MakeNode(Iris::IrisElementTag::Text, {{"text", Iris::IrisPropValue{std::string("new")}}})},
+                            Iris::IrisPropValue{std::string("menu")});
+        iris::ReconcileWidget(Widget, Old, New, Mount);
+
+        Portal = dynamic_cast<MockPortalTarget*>(Widget.get());
+        ASSERT_TRUE(Portal->Properties.X == 9.0f && Portal->Properties.Width == 80.0f);
+        ASSERT_EQUAL(dynamic_cast<MockWidget*>(Portal->GetChildAt(0))->Id, ChildId);
+        ASSERT_EQUAL(dynamic_cast<MockWidget*>(Portal->GetChildAt(0))->Text, "new");
+    });
+
+    IT("a matched Portal reapplies omitted properties as backend-neutral defaults", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        Iris::IrisProps OldProps({{"x", Iris::IrisPropValue{7.0f}},
+                                  {"dismissOnOutsideClick", Iris::IrisPropValue{true}},
+                                  {"onDismiss", Iris::IrisPropValue{std::function<void()>([]() {})}}});
+        auto Old = MakeNode(Iris::IrisElementTag::Portal, OldProps,
+                            {MakeNode(Iris::IrisElementTag::Frame)});
+        std::unique_ptr<Umbra::IWidget> Widget;
+        iris::ReconcileWidget(Widget, Iris::Component(nullptr), Old, Mount);
+
+        auto New = MakeNode(Iris::IrisElementTag::Portal, {}, {MakeNode(Iris::IrisElementTag::Frame)});
+        iris::ReconcileWidget(Widget, Old, New, Mount);
+
+        auto* Portal = dynamic_cast<MockPortalTarget*>(Widget.get());
+        ASSERT_TRUE(Portal->Properties.X == 0.0f);
+        ASSERT_FALSE(Portal->Properties.DismissOnOutsideClick);
+        ASSERT_FALSE(static_cast<bool>(Portal->Properties.OnDismiss));
+    });
+
+    IT("a Portal key change prepares and destroys the old target before mounting replacement", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        auto Old = MakeNode(Iris::IrisElementTag::Portal, {}, {MakeNode(Iris::IrisElementTag::Frame)},
+                            Iris::IrisPropValue{1});
+        std::unique_ptr<Umbra::IWidget> Widget;
+        iris::ReconcileWidget(Widget, Iris::Component(nullptr), Old, Mount);
+        PortalLifetimeEvents.clear();
+        auto New = MakeNode(Iris::IrisElementTag::Portal, {}, {MakeNode(Iris::IrisElementTag::Frame)},
+                            Iris::IrisPropValue{2});
+        iris::ReconcileWidget(Widget, Old, New, Mount);
+        REQUIRE_TRUE(PortalLifetimeEvents.size() >= 4);
+        ASSERT_EQUAL(PortalLifetimeEvents[0], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[1], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[2], "adapter-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[3], "props-applied");
+    });
+
+    IT("removing a Portal deterministically prepares it before destruction", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        auto Old = MakeNode(Iris::IrisElementTag::Portal, {}, {MakeNode(Iris::IrisElementTag::Frame)});
+        std::unique_ptr<Umbra::IWidget> Widget;
+        iris::ReconcileWidget(Widget, Iris::Component(nullptr), Old, Mount);
+        PortalLifetimeEvents.clear();
+        iris::ReconcileWidget(Widget, Old, Iris::Component(nullptr), Mount);
+        ASSERT_TRUE(Widget == nullptr);
+        REQUIRE_EQUAL(PortalLifetimeEvents.size(), static_cast<std::size_t>(3));
+        ASSERT_EQUAL(PortalLifetimeEvents[0], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[1], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[2], "adapter-destroyed");
+    });
+
+    IT("removing a Portal from an ordinary parent's child list prepares it before destruction", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        MockWidget Parent("Frame");
+        std::vector<Iris::Component> OldChildren;
+        OldChildren.push_back(
+            MakeNode(Iris::IrisElementTag::Portal, {}, {MakeNode(Iris::IrisElementTag::Frame)}));
+        iris::ReconcileChildrenAt(Parent, 0, {}, OldChildren, Mount);
+        PortalLifetimeEvents.clear();
+
+        iris::ReconcileChildrenAt(Parent, 0, OldChildren, {}, Mount);
+        REQUIRE_EQUAL(PortalLifetimeEvents.size(), static_cast<std::size_t>(3));
+        ASSERT_EQUAL(PortalLifetimeEvents[0], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[1], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[2], "adapter-destroyed");
+    });
+
+    IT("a backend synchronous dismissal tears down slots and content before onDismiss", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        Iris::IrisProps Props;
+        Props["onDismiss"] = Iris::IrisPropValue{std::function<void()>([]() {
+            PortalLifetimeEvents.push_back("on-dismiss");
+        })};
+        auto Node = MakeNode(Iris::IrisElementTag::Portal, Props, {MakeNode(Iris::IrisElementTag::Frame)});
+        std::unique_ptr<Umbra::IWidget> Widget;
+        iris::ReconcileWidget(Widget, Iris::Component(nullptr), Node, Mount);
+        PortalLifetimeEvents.clear();
+        dynamic_cast<MockPortalTarget*>(Widget.get())->DismissSynchronously();
+        REQUIRE_EQUAL(PortalLifetimeEvents.size(), static_cast<std::size_t>(3));
+        ASSERT_EQUAL(PortalLifetimeEvents[0], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[1], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[2], "on-dismiss");
+    });
+
+    IT("a copied onDismiss remains safe when its callback synchronously destroys the Portal adapter", {
+        PortalLifetimeEvents.clear();
+        int MountCount = 0;
+        TestMounter Mount(&MountCount);
+        std::unique_ptr<Umbra::IWidget> Widget;
+        Iris::IrisProps Props;
+        Props["onDismiss"] = Iris::IrisPropValue{std::function<void()>([&Widget]() {
+            PortalLifetimeEvents.push_back("on-dismiss");
+            Widget.reset();
+        })};
+        auto Node = MakeNode(Iris::IrisElementTag::Portal, Props, {MakeNode(Iris::IrisElementTag::Frame)});
+        iris::ReconcileWidget(Widget, Iris::Component(nullptr), Node, Mount);
+        PortalLifetimeEvents.clear();
+
+        dynamic_cast<MockPortalTarget*>(Widget.get())->DismissSynchronously();
+
+        ASSERT_TRUE(Widget == nullptr);
+        REQUIRE_EQUAL(PortalLifetimeEvents.size(), static_cast<std::size_t>(4));
+        ASSERT_EQUAL(PortalLifetimeEvents[0], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[1], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[2], "on-dismiss");
+        ASSERT_EQUAL(PortalLifetimeEvents[3], "adapter-destroyed");
+    });
+
+    IT("synchronous dismissal prepares dynamically-shaped nested portals deepest first", {
+        PortalLifetimeEvents.clear();
+        auto Outer = std::make_unique<MockPortalTarget>();
+        auto Inner = std::make_unique<MockPortalTarget>();
+        Inner->Children.push_back(std::make_unique<MockWidget>("content"));
+        Outer->Children.push_back(std::move(Inner));
+        Outer->Properties.OnDismiss = []() { PortalLifetimeEvents.push_back("on-dismiss"); };
+
+        Outer->DismissSynchronously();
+
+        ASSERT_TRUE(std::find(PortalLifetimeEvents.begin(), PortalLifetimeEvents.end(),
+                              "destroyed-without-prepare") == PortalLifetimeEvents.end());
+        REQUIRE_TRUE(PortalLifetimeEvents.size() >= 6);
+        ASSERT_EQUAL(PortalLifetimeEvents[0], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[1], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[2], "slot-state-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[3], "adapter-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[4], "content-destroyed");
+        ASSERT_EQUAL(PortalLifetimeEvents[5], "on-dismiss");
     });
 
     IT("ReconcileChildren preserves identity across a reorder by key", {

@@ -47,6 +47,11 @@ public:
                     AddError("<Split> requires exactly two children (leading and trailing panes)", Node.Location);
                 }
                 Base = EmitOrdinaryPrimitive(Node);
+            } else if (Node.Tag == "Portal") {
+                if (Node.Children.size() != 1 || Node.Children[0].Kind != ElementChildKind::Element) {
+                    AddError("<Portal> requires exactly one element child", Node.Location);
+                }
+                Base = EmitOrdinaryPrimitive(Node);
             } else {
                 Base = EmitOrdinaryPrimitive(Node);
             }

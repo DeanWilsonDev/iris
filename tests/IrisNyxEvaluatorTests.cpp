@@ -88,6 +88,40 @@ DESCRIBE("IrisNyxEvaluator", {
         ASSERT_TRUE(std::get<float>(Result.Props.at("wheelStep")) == 42.0f);
     });
 
+    IT("a real .irisx Portal evaluates placement, dismissal, and its declarative child", {
+        const std::string_view Source =
+            "void Popup(float left, float top) {\n"
+            "    render {\n"
+            "        <Portal x={left} y={top} width={200.0} height={120.0}\n"
+            "                dismissOnOutsideClick={true} onDismiss={() -> {}}>\n"
+            "            <Frame class=\"menu\" />\n"
+            "        </Portal>\n"
+            "    }\n"
+            "}\n";
+        const IrisIrDocument Document = BuildRealDocument(Source);
+
+        nyx::host::NyxRuntime Runtime;
+        auto FileScope = Runtime.CreateScope(ReconstructNyxSource(Document), "test.irisx");
+        auto Invocation = Runtime.InvokeComponent(
+            FileScope, "Popup", {nyx::runtime::Value(10.0f), nyx::runtime::Value(20.0f)});
+
+        ChaosSlotMarker Marker;
+        std::vector<IrisIrRuntimeError> Errors;
+        NyxEvaluator Eval = MakeNyxEvaluator(Runtime, Invocation, Marker, nullptr, &Errors);
+        const Component Result = ConvertIrElement(OnlyRenderBlock(Document).Root, Eval, &Errors);
+
+        REQUIRE_TRUE(Errors.empty());
+        ASSERT_TRUE(Result.Tag == IrisElementTag::Portal);
+        ASSERT_TRUE(std::get<float>(Result.Props.at("x")) == 10.0f);
+        ASSERT_TRUE(std::get<float>(Result.Props.at("y")) == 20.0f);
+        ASSERT_TRUE(std::get<float>(Result.Props.at("width")) == 200.0f);
+        ASSERT_TRUE(std::get<float>(Result.Props.at("height")) == 120.0f);
+        ASSERT_TRUE(std::get<bool>(Result.Props.at("dismissOnOutsideClick")));
+        ASSERT_TRUE(std::holds_alternative<std::function<void()>>(Result.Props.at("onDismiss")));
+        REQUIRE_EQUAL(Result.Children.size(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(Result.Children[0].Tag == IrisElementTag::Frame);
+    });
+
     // docs/next-steps.md's "EvaluateProp/EvaluateNative/EvaluateSlot never check
     // Runtime.EvaluateInScope's result for an error value" entry: a prop expression that
     // throws a real nyx-proto RuntimeError (here, a field access on an object that doesn't

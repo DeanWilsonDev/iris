@@ -101,6 +101,20 @@ DESCRIBE("IrisIr", {
         ASSERT_TRUE(Str(Field(Seg, "value")) == "doIt()");
     });
 
+    IT("a Portal and its child are preserved in generated .iris.ir", {
+        const Amanuensis::Value Doc = Build(R"(render {
+            <Portal x={10.0} y={20.0} width={200.0} height={120.0}
+                    dismissOnOutsideClick={true} onDismiss={closeMenu}>
+                <Frame class="menu" />
+            </Portal>
+        })");
+        const Amanuensis::Value& Root = Field(Amanuensis::Json::At(Field(Doc, "body"), 0), "root");
+        ASSERT_EQUAL(Str(Field(Root, "tag")), "Portal");
+        REQUIRE_EQUAL(Amanuensis::Json::Size(Field(Root, "props")), static_cast<std::size_t>(6));
+        REQUIRE_EQUAL(Amanuensis::Json::Size(Field(Root, "children")), static_cast<std::size_t>(1));
+        ASSERT_EQUAL(Str(Field(Amanuensis::Json::At(Field(Root, "children"), 0), "tag")), "Frame");
+    });
+
     IT("key and ref are preserved as their own ElementNode fields, not dropped", {
         const Amanuensis::Value Doc = Build(R"(render { <Frame key="row-1" ref="trigger" /> })");
         const Amanuensis::Value& Root = Field(Amanuensis::Json::At(Field(Doc, "body"), 0), "root");

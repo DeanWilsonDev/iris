@@ -3,8 +3,9 @@
 namespace Iris {
 
 const std::unordered_set<std::string>& CorePrimitiveTagNames() {
-    static const std::unordered_set<std::string> Names = {"Frame", "Inline", "Grid",   "Image", "Icon",  "Text",
-                                                            "Scroll", "Input", "Slot", "Native", "Split"};
+    static const std::unordered_set<std::string> Names = {"Frame",  "Inline", "Grid",   "Image",
+                                                           "Icon",   "Text",   "Scroll", "Input",
+                                                           "Slot",   "Native", "Portal", "Split"};
     return Names;
 }
 
@@ -33,6 +34,12 @@ const std::unordered_map<std::string, std::string>& PrimitivePropTypeNames() {
         {"ratio", "float"},
         {"minPaneSize", "float"},
         {"handleThickness", "float"},
+        {"x", "float"},
+        {"y", "float"},
+        {"width", "float"},
+        {"height", "float"},
+        {"dismissOnOutsideClick", "bool"},
+        {"onDismiss", "std::function<void()>"},
         // <Text>'s own content prop is synthesized by EmitTextPrimitive, bypassing this
         // table entirely -- this entry is only for <Input>'s initial-value prop, which
         // (unlike <Text>) is an ordinary attribute going through EmitPrimitiveProps like

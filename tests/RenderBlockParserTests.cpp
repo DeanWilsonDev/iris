@@ -56,6 +56,24 @@ DESCRIBE("RenderBlockParser", {
         ASSERT_TRUE(Child.Element && Child.Element->Tag == "Button"); // child tag is Button
     });
 
+    IT("a Portal parses one child and backend-neutral placement and dismissal props", {
+        const auto Result = ParseSource(R"(render {
+            <Portal x={10.0} y={20.0} width={200.0} height={120.0}
+                    dismissOnOutsideClick={true} onDismiss={closeMenu}>
+                <Frame class="menu" />
+            </Portal>
+        })");
+        ASSERT_TRUE(Result.Errors.empty());
+        REQUIRE_EQUAL(Result.Blocks.size(), static_cast<std::size_t>(1));
+        const auto& Root = Result.Blocks[0].Root;
+        ASSERT_EQUAL(Root.Tag, "Portal");
+        REQUIRE_EQUAL(Root.Children.size(), static_cast<std::size_t>(1));
+        ASSERT_TRUE(Root.Children[0].Element->Tag == "Frame");
+        ASSERT_TRUE(FindProp(Root, "x") != nullptr);
+        ASSERT_TRUE(FindProp(Root, "dismissOnOutsideClick") != nullptr);
+        ASSERT_TRUE(FindProp(Root, "onDismiss") != nullptr);
+    });
+
     IT("the key prop is extracted, not left in Props", {
         const auto Result = ParseSource(R"(render { <Frame key={item.id} class="row"></Frame> })");
         ASSERT_TRUE(Result.Errors.empty()); // key + class props parse with no errors
